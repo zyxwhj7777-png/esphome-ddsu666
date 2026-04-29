@@ -1,1 +1,860 @@
+# =============================================================
+# DTSU666 / DSSU666 三相电子式电能表 — ESPHome (ModBus-RTU)
+# 正泰仪器仪表 | 文件编号 ZTY0.464.1622
+#
+# 查询分三级:
+#   Lv1 快速(3s)  : 电压 / 电流 / 有功功率 / 无功功率
+#   Lv2 中速(15s) : 功率因数 / 频率 / 需量
+#   Lv3 慢速(60s) : 电能(正反向/四象限/费率) / 配置参数
+#
+# 所有可写寄存器均暴露为 number / select / button 实体,
+# 可在 HA 或 ESPHome web 上直接操作。
+#
+# 接线:
+#   ESP32 GPIO17(TX) ──► MAX485 DI
+#   ESP32 GPIO16(RX) ◄── MAX485 RO
+#   ESP32 GPIO4      ──► MAX485 DE/RE (高=发,低=收)
+# =============================================================
 
+substitutions:
+  device_name: dtsu666
+  friendly_name: "DTSU666 电能表"
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+  platform: ESP32
+  board: esp32dev
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+api:
+  reboot_timeout: 0s
+
+ota:
+  platform: esphome
+  password: !secret ota_password
+
+logger:
+  baud_rate: 0          # 释放 UART0 给 RS485 或保持默认 USB 调试
+
+web_server:
+  port: 80
+
+# =============================================================
+# UART — RS485 通道
+# 默认出厂: DL/T 645-2007, 2400bps, E.1
+# 客户定制 ModBus: 9600bps, n.1, 地址1
+# 请按实际配置修改 baud_rate / parity
+# =============================================================
+uart:
+  id: uart_bus
+  tx_pin: GPIO17
+  rx_pin: GPIO16
+  baud_rate: 9600       # ModBus 客户定制默认 9600
+  parity: NONE           # n.1 (无校验, 1停止位)
+  stop_bits: 1
+
+# =============================================================
+# ModBus 总线 + 控制器
+# =============================================================
+modbus:
+  id: modbus1
+  uart_id: uart_bus
+  flow_control_pin: GPIO4
+
+modbus_controller:
+  - id: meter
+    address: 1           # 电表通讯地址 (0x002E 可远程改)
+    modbus_id: modbus1
+    setup_priority: -10
+    update_interval: never   # 由各 sensor 独立控制刷新
+
+# =============================================================
+#  ██████╗     ██╗      ██████╗  █████╗ ██████╗
+#  ██╔══██╗   ███║     ██╔═══██╗██╔══██╗██╔══██╗
+#  ██║  ██║   ╚██║     ██║   ██║███████║██║  ██║
+#  ██║  ██║    ██║     ██║   ██║██╔══██║██║  ██║
+#  ██████╔╝    ██║     ╚██████╔╝██║  ██║██████╔╝
+#  ╚═════╝     ╚═╝      ╚═════╝ ╚═╝  ╚═╝╚═════╝
+#  电压 / 电流 / 有功功率 / 无功功率 — 每 3 秒
+# =============================================================
+sensor:
+  # ---------- A 相电压 (2006H) ----------
+  - platform: modbus_controller
+    id: ua
+    name: "A 相电压"
+    modbus_controller_id: meter
+    register_type: holding
+    address: 0x2006       # Ua
+    value_type: FP32
+    unit_of_measurement: "V"
+    accuracy_decimals: 1
+    device_class: voltage
+    state_class: measurement
+    filters:
+      - multiply: 0.1    # 二次值 × 0.1 = V
+    update_interval: 3s
+
+  # ---------- B 相电压 (2008H) ----------
+  - platform: modbus_controller
+    id: ub
+    name: "B 相电压"
+    modbus_controller_id: meter
+    register_type: holding
+    address: 0x2008
+    value_type: FP32
+    unit_of_measurement: "V"
+    accuracy_decimals: 1
+    device_class: voltage
+    state_class: measurement
+    filters:
+      - multiply: 0.1
+    update_interval: 3s
+
+  # ---------- C 相电压 (200AH) ----------
+  - platform: modbus_controller
+    id: uc
+    name: "C 相电压"
+    modbus_controller_id: meter
+    register_type: holding
+    address: 0x200A
+    value_type: FP32
+    unit_of_measurement: "V"
+    accuracy_decimals: 1
+    device_class: voltage
+    state_class: measurement
+    filters:
+      - multiply: 0.1
+    update_interval: 3s
+
+  # ---------- A 相电流 (200CH) ----------
+  - platform: modbus_controller
+    id: ia
+    name: "A 相电流"
+    modbus_controller_id: meter
+    register_type: holding
+    address: 0x200C
+    value_type: FP32
+    unit_of_measurement: "A"
+    accuracy_decimals: 3
+    device_class: current
+    state_class: measurement
+    filters:
+      - multiply: 0.001
+    update_interval: 3s
+
+  # ---------- B 相电流 (200EH) ----------
+  - platform: modbus_controller
+    id: ib
+    name: "B 相电流"
+    modbus_controller_id: meter
+    register_type: holding
+    address: 0x200E
+    value_type: FP32
+    unit_of_measurement: "A"
+    accuracy_decimals: 3
+    device_class: current
+    state_class: measurement
+    filters:
+      - multiply: 0.001
+    update_interval: 3s
+
+  # ---------- C 相电流 (2010H) ----------
+  - platform: modbus_controller
+    id: ic
+    name: "C 相电流"
+    modbus_controller_id: meter
+    register_type: holding
+    address: 0x2010
+    value_type: FP32
+    unit_of_measurement: "A"
+    accuracy_decimals: 3
+    device_class: current
+    state_class: measurement
+    filters:
+      - multiply: 0.001
+    update_interval: 3s
+
+  # ---------- 合相有功功率 (2012H) ----------
+  - platform: modbus_controller
+    id: pt
+    name: "合相有功功率"
+    modbus_controller_id: meter
+    register_type: holding
+    address: 0x2012
+    value_type: FP32
+    unit_of_measurement: "W"
+    accuracy_decimals: 1
+    device_class: power
+    state_class: measurement
+    filters:
+      - multiply: 0.1
+    update_interval: 3s
+
+  # ---------- A 相有功功率 (2014H) ----------
+  - platform: modbus_controller
+    id: pa
+    name: "A 相有功功率"
+    modbus_controller_id: meter
+    register_type: holding
+    address: 0x2014
+    value_type: FP32
+    unit_of_measurement: "W"
+    accuracy_decimals: 1
+    device_class: power
+    state_class: measurement
+    filters:
+      - multiply: 0.1
+    update_interval: 3s
+
+  # ---------- B 相有功功率 (2016H) ----------
+  - platform: modbus_controller
+    id: pb
+    name: "B 相有功功率"
+    modbus_controller_id: meter
+    register_type: holding
+    address: 0x2016
+    value_type: FP32
+    unit_of_measurement: "W"
+    accuracy_decimals: 1
+    device_class: power
+    state_class: measurement
+    filters:
+      - multiply: 0.1
+    update_interval: 3s
+
+  # ---------- C 相有功功率 (2018H) ----------
+  - platform: modbus_controller
+    id: pc
+    name: "C 相有功功率"
+    modbus_controller_id: meter
+    register_type: holding
+    address: 0x2018
+    value_type: FP32
+    unit_of_measurement: "W"
+    accuracy_decimals: 1
+    device_class: power
+    state_class: measurement
+    filters:
+      - multiply: 0.1
+    update_interval: 3s
+
+  # ---------- 合相无功功率 (201AH) ----------
+  - platform: modbus_controller
+    id: qt
+    name: "合相无功功率"
+    modbus_controller_id: meter
+    register_type: holding
+    address: 0x201A
+    value_type: FP32
+    unit_of_measurement: "var"
+    accuracy_decimals: 1
+    state_class: measurement
+    filters:
+      - multiply: 0.1
+    update_interval: 3s
+
+  # ---------- A 相无功功率 (201CH) ----------
+  - platform: modbus_controller
+    id: qa
+    name: "A 相无功功率"
+    modbus_controller_id: meter
+    register_type: holding
+    address: 0x201C
+    value_type: FP32
+    unit_of_measurement: "var"
+    accuracy_decimals: 1
+    state_class: measurement
+    filters:
+      - multiply: 0.1
+    update_interval: 3s
+
+  # ---------- B 相无功功率 (201EH) ----------
+  - platform: modbus_controller
+    id: qb
+    name: "B 相无功功率"
+    modbus_controller_id: meter
+    register_type: holding
+    address: 0x201E
+    value_type: FP32
+    unit_of_measurement: "var"
+    accuracy_decimals: 1
+    state_class: measurement
+    filters:
+      - multiply: 0.1
+    update_interval: 3s
+
+  # ---------- C 相无功功率 (2020H) ----------
+  - platform: modbus_controller
+    id: qc
+    name: "C 相无功功率"
+    modbus_controller_id: meter
+    register_type: holding
+    address: 0x2020
+    value_type: FP32
+    unit_of_measurement: "var"
+    accuracy_decimals: 1
+    state_class: measurement
+    filters:
+      - multiply: 0.1
+    update_interval: 3s
+
+  # =============================================================
+  #  ███╗   ███╗███████╗██████╗ ██╗██╗   ██╗███╗   ███╗
+  #  ████╗ ████║██╔════╝██╔══██╗██║██║   ██║████╗ ████║
+  #  ██╔████╔██║█████╗  ██║  ██║██║██║   ██║██╔████╔██║
+  #  ██║╚██╔╝██║██╔══╝  ██║  ██║██║██║   ██║██║╚██╔╝██║
+  #  ██║ ╚═╝ ██║███████╗██████╔╝██║╚██████╔╝██║ ╚═╝ ██║
+  #  ╚═╝     ╚═╝╚══════╝╚═════╝ ╚═╝ ╚═════╝ ╚═╝     ╚═╝
+  #  功率因数 / 频率 / 需量 — 每 15 秒
+  # =============================================================
+
+  # ---------- 合相功率因数 (202AH) ----------
+  - platform: modbus_controller
+    id: pft
+    name: "合相功率因数"
+    modbus_controller_id: meter
+    register_type: holding
+    address: 0x202A
+    value_type: FP32
+    unit_of_measurement: ""
+    accuracy_decimals: 3
+    device_class: power_factor
+    state_class: measurement
+    filters:
+      - multiply: 0.001
+    update_interval: 15s
+
+  # ---------- A 相功率因数 (202CH) ----------
+  - platform: modbus_controller
+    id: pfa
+    name: "A 相功率因数"
+    modbus_controller_id: meter
+    register_type: holding
+    address: 0x202C
+    value_type: FP32
+    accuracy_decimals: 3
+    device_class: power_factor
+    state_class: measurement
+    filters:
+      - multiply: 0.001
+    update_interval: 15s
+
+  # ---------- B 相功率因数 (202EH) ----------
+  - platform: modbus_controller
+    id: pfb
+    name: "B 相功率因数"
+    modbus_controller_id: meter
+    register_type: holding
+    address: 0x202E
+    value_type: FP32
+    accuracy_decimals: 3
+    device_class: power_factor
+    state_class: measurement
+    filters:
+      - multiply: 0.001
+    update_interval: 15s
+
+  # ---------- C 相功率因数 (2030H) ----------
+  - platform: modbus_controller
+    id: pfc
+    name: "C 相功率因数"
+    modbus_controller_id: meter
+    register_type: holding
+    address: 0x2030
+    value_type: FP32
+    accuracy_decimals: 3
+    device_class: power_factor
+    state_class: measurement
+    filters:
+      - multiply: 0.001
+    update_interval: 15s
+
+  # ---------- 频率 (2044H) ----------
+  - platform: modbus_controller
+    id: freq
+    name: "频率"
+    modbus_controller_id: meter
+    register_type: holding
+    address: 0x2044
+    value_type: FP32
+    unit_of_measurement: "Hz"
+    accuracy_decimals: 2
+    device_class: frequency
+    state_class: measurement
+    filters:
+      - multiply: 0.01
+    update_interval: 15s
+
+  # ---------- 当前有功需量 (2050H) ----------
+  - platform: modbus_controller
+    id: demand
+    name: "当前有功需量"
+    modbus_controller_id: meter
+    register_type: holding
+    address: 0x2050
+    value_type: FP32
+    unit_of_measurement: "W"
+    accuracy_decimals: 1
+    device_class: power
+    state_class: measurement
+    filters:
+      - multiply: 0.1
+    update_interval: 15s
+
+  # =============================================================
+  #  ███████╗███╗   ██╗███████╗██████╗  ██████╗ ██╗   ██╗
+  #  ██╔════╝████╗  ██║██╔════╝██╔══██╗██╔═══██╗╚██╗ ██╔╝
+  #  █████╗  ██╔██╗ ██║█████╗  ██████╔╝██║   ██║ ╚████╔╝
+  #  ██╔══╝  ██║╚██╗██║██╔══╝  ██╔══██╗██║   ██║  ╚██╔╝
+  #  ███████╗██║ ╚████║███████╗██║  ██║╚██████╔╝   ██║
+  #  ╚══════╝╚═╝  ╚═══╝╚══════╝╚═╝  ╚═╝ ╚═════╝    ╚═╝
+  #  电能(正反向/四象限/费率) — 每 60 秒
+  # =============================================================
+
+  # ---------- 正向有功总电能 (101EH) ----------
+  - platform: modbus_controller
+    id: imp_ep
+    name: "正向有功总电能"
+    modbus_controller_id: meter
+    register_type: holding
+    address: 0x101E
+    value_type: FP32
+    unit_of_measurement: "kWh"
+    accuracy_decimals: 2
+    device_class: energy
+    state_class: total_increasing
+    update_interval: 60s
+
+  # ---------- 正向有功 T1 尖 (1020H) ----------
+  - platform: modbus_controller
+    id: imp_ep_t1
+    name: "正向有功 尖"
+    modbus_controller_id: meter
+    register_type: holding
+    address: 0x1020
+    value_type: FP32
+    unit_of_measurement: "kWh"
+    accuracy_decimals: 2
+    device_class: energy
+    state_class: total_increasing
+    update_interval: 60s
+
+  # ---------- 正向有功 T2 峰 (1022H) ----------
+  - platform: modbus_controller
+    id: imp_ep_t2
+    name: "正向有功 峰"
+    modbus_controller_id: meter
+    register_type: holding
+    address: 0x1022
+    value_type: FP32
+    unit_of_measurement: "kWh"
+    accuracy_decimals: 2
+    device_class: energy
+    state_class: total_increasing
+    update_interval: 60s
+
+  # ---------- 正向有功 T3 平 (1024H) ----------
+  - platform: modbus_controller
+    id: imp_ep_t3
+    name: "正向有功 平"
+    modbus_controller_id: meter
+    register_type: holding
+    address: 0x1024
+    value_type: FP32
+    unit_of_measurement: "kWh"
+    accuracy_decimals: 2
+    device_class: energy
+    state_class: total_increasing
+    update_interval: 60s
+
+  # ---------- 正向有功 T4 谷 (1026H) ----------
+  - platform: modbus_controller
+    id: imp_ep_t4
+    name: "正向有功 谷"
+    modbus_controller_id: meter
+    register_type: holding
+    address: 0x1026
+    value_type: FP32
+    unit_of_measurement: "kWh"
+    accuracy_decimals: 2
+    device_class: energy
+    state_class: total_increasing
+    update_interval: 60s
+
+  # ---------- 反向有功总电能 (1028H) ----------
+  - platform: modbus_controller
+    id: exp_ep
+    name: "反向有功总电能"
+    modbus_controller_id: meter
+    register_type: holding
+    address: 0x1028
+    value_type: FP32
+    unit_of_measurement: "kWh"
+    accuracy_decimals: 2
+    device_class: energy
+    state_class: total_increasing
+    update_interval: 60s
+
+  # ---------- 反向有功 T1~T4 ----------
+  - platform: modbus_controller
+    id: exp_ep_t1
+    name: "反向有功 尖"
+    modbus_controller_id: meter
+    register_type: holding
+    address: 0x102A
+    value_type: FP32
+    unit_of_measurement: "kWh"
+    accuracy_decimals: 2
+    device_class: energy
+    state_class: total_increasing
+    update_interval: 60s
+
+  - platform: modbus_controller
+    id: exp_ep_t2
+    name: "反向有功 峰"
+    modbus_controller_id: meter
+    register_type: holding
+    address: 0x102C
+    value_type: FP32
+    unit_of_measurement: "kWh"
+    accuracy_decimals: 2
+    device_class: energy
+    state_class: total_increasing
+    update_interval: 60s
+
+  - platform: modbus_controller
+    id: exp_ep_t3
+    name: "反向有功 平"
+    modbus_controller_id: meter
+    register_type: holding
+    address: 0x102E
+    value_type: FP32
+    unit_of_measurement: "kWh"
+    accuracy_decimals: 2
+    device_class: energy
+    state_class: total_increasing
+    update_interval: 60s
+
+  - platform: modbus_controller
+    id: exp_ep_t4
+    name: "反向有功 谷"
+    modbus_controller_id: meter
+    register_type: holding
+    address: 0x1030
+    value_type: FP32
+    unit_of_measurement: "kWh"
+    accuracy_decimals: 2
+    device_class: energy
+    state_class: total_increasing
+    update_interval: 60s
+
+  # ---------- 四象限无功总电能 ----------
+  # 第一象限 (1032H)
+  - platform: modbus_controller
+    id: q1_eq
+    name: "第一象限无功电能"
+    modbus_controller_id: meter
+    register_type: holding
+    address: 0x1032
+    value_type: FP32
+    unit_of_measurement: "kvarh"
+    accuracy_decimals: 2
+    state_class: total_increasing
+    update_interval: 60s
+
+  # 第二象限 (103CH)
+  - platform: modbus_controller
+    id: q2_eq
+    name: "第二象限无功电能"
+    modbus_controller_id: meter
+    register_type: holding
+    address: 0x103C
+    value_type: FP32
+    unit_of_measurement: "kvarh"
+    accuracy_decimals: 2
+    state_class: total_increasing
+    update_interval: 60s
+
+  # 第三象限 (1046H)
+  - platform: modbus_controller
+    id: q3_eq
+    name: "第三象限无功电能"
+    modbus_controller_id: meter
+    register_type: holding
+    address: 0x1046
+    value_type: FP32
+    unit_of_measurement: "kvarh"
+    accuracy_decimals: 2
+    state_class: total_increasing
+    update_interval: 60s
+
+  # 第四象限 (1050H)
+  - platform: modbus_controller
+    id: q4_eq
+    name: "第四象限无功电能"
+    modbus_controller_id: meter
+    register_type: holding
+    address: 0x1050
+    value_type: FP32
+    unit_of_measurement: "kvarh"
+    accuracy_decimals: 2
+    state_class: total_increasing
+    update_interval: 60s
+
+  # ---------- 版本号 (0000H) ----------
+  - platform: modbus_controller
+    id: fw_ver
+    name: "固件版本"
+    modbus_controller_id: meter
+    register_type: holding
+    address: 0x0000
+    value_type: U_WORD
+    entity_category: diagnostic
+    update_interval: 60s
+
+  # ---------- 编程密码 (0001H) — 只读显示 ----------
+  - platform: modbus_controller
+    id: prog_pwd
+    name: "编程密码"
+    modbus_controller_id: meter
+    register_type: holding
+    address: 0x0001
+    value_type: U_WORD
+    entity_category: diagnostic
+    update_interval: 60s
+
+# =============================================================
+#  ██╗    ██╗██████╗ ██╗████████╗███████╗
+#  ██║    ██║██╔══██╗██║╚══██╔══╝██╔════╝
+#  ██║ █╗ ██║██████╔╝██║   ██║   █████╗
+#  ██║███╗██║██╔══██╗██║   ██║   ██╔══╝
+#  ╚███╔███╔╝██║  ██║██║   ██║   ███████╗
+#   ╚══╝╚══╝ ╚═╝  ╚═╝╚═╝   ╚═╝   ╚══════╝
+#  可写参数 — 通过 number / select / button 暴露
+# =============================================================
+number:
+  # ---------- 电流变比 CT (0006H) ----------
+  - platform: modbus_controller
+    id: set_ct
+    name: "电流变比 CT"
+    modbus_controller_id: meter
+    register_type: holding
+    address: 0x0006
+    value_type: S_WORD
+    min_value: 1
+    max_value: 9999
+    step: 1
+    entity_category: config
+    write_lambda: |-
+      return x;
+
+  # ---------- 电压变比 PT (0007H) ----------
+  # 实际值 = 寄存器值 × 0.1
+  - platform: modbus_controller
+    id: set_pt
+    name: "电压变比 PT"
+    modbus_controller_id: meter
+    register_type: holding
+    address: 0x0007
+    value_type: S_WORD
+    min_value: 1
+    max_value: 9999
+    step: 1
+    entity_category: config
+    lambda: |-
+      // 读回: 寄存器原始值 × 0.1 = 实际 PT
+      return x * 0.1f;
+    write_lambda: |-
+      // 写入: 实际 PT × 10 = 寄存器值
+      return x * 10.0f;
+
+  # ---------- 轮显时间 (000AH) ----------
+  - platform: modbus_controller
+    id: set_disp
+    name: "轮显时间"
+    modbus_controller_id: meter
+    register_type: holding
+    address: 0x000A
+    value_type: S_WORD
+    min_value: 0
+    max_value: 30
+    step: 1
+    unit_of_measurement: "s"
+    entity_category: config
+    write_lambda: |-
+      return x;
+
+  # ---------- 背光时间 (000BH) ----------
+  - platform: modbus_controller
+    id: set_bl
+    name: "背光时间"
+    modbus_controller_id: meter
+    register_type: holding
+    address: 0x000B
+    value_type: S_WORD
+    min_value: 0
+    max_value: 30
+    step: 1
+    unit_of_measurement: "s"
+    entity_category: config
+    write_lambda: |-
+      return x;
+
+  # ---------- 通讯地址 (002EH) ----------
+  - platform: modbus_controller
+    id: set_addr
+    name: "通讯地址"
+    modbus_controller_id: meter
+    register_type: holding
+    address: 0x002E
+    value_type: S_WORD
+    min_value: 1
+    max_value: 247
+    step: 1
+    entity_category: config
+    write_lambda: |-
+      return x;
+
+select:
+  # ---------- 通讯协议 (002CH) ----------
+  - platform: modbus_controller
+    id: set_proto
+    name: "通讯协议"
+    modbus_controller_id: meter
+    register_type: holding
+    address: 0x002C
+    value_type: S_WORD
+    optionsmap:
+      "DL/T 645-2007": 1
+      "ModBus n.2": 2
+      "ModBus n.1": 3
+      "ModBus E.1": 4
+      "ModBus o.1": 5
+    entity_category: config
+
+  # ---------- 波特率 (002DH) ----------
+  - platform: modbus_controller
+    id: set_baud
+    name: "波特率"
+    modbus_controller_id: meter
+    register_type: holding
+    address: 0x002D
+    value_type: S_WORD
+    optionsmap:
+      "1200": 0
+      "2400": 1
+      "4800": 2
+      "9600": 3
+    entity_category: config
+
+  # ---------- 接线方式 (0003H) ----------
+  - platform: modbus_controller
+    id: set_net
+    name: "接线方式"
+    modbus_controller_id: meter
+    register_type: holding
+    address: 0x0003
+    value_type: S_WORD
+    optionsmap:
+      "三相四线 n.34": 0
+      "三相三线 n.33": 1
+    entity_category: config
+
+  # ---------- 脉冲输出 (0009H) ----------
+  - platform: modbus_controller
+    id: set_pulse
+    name: "脉冲输出"
+    modbus_controller_id: meter
+    register_type: holding
+    address: 0x0009
+    value_type: S_WORD
+    optionsmap:
+      "有功电能": 0
+      "无功电能": 1
+      "其他": 2
+    entity_category: config
+
+button:
+  # ---------- 电能清零 (0002H, 写1生效) ----------
+  - platform: modbus_controller
+    id: btn_clear_energy
+    name: "电能清零"
+    modbus_controller_id: meter
+    register_type: holding
+    address: 0x0002
+    value_type: S_WORD
+    entity_category: config
+    write_lambda: |-
+      return 1;
+
+# =============================================================
+#  ███████╗███████╗██████╗ ██╗   ██╗██╗ ██████╗███████╗
+#  ██╔════╝██╔════╝██╔══██╗██║   ██║██║██╔════╝██╔════╝
+#  ███████╗█████╗  ██████╔╝██║   ██║██║██║     █████╗
+#  ╚════██║██╔══╝  ██╔══██╗╚██╗ ██╔╝██║██║     ██╔══╝
+#  ███████║███████╗██║  ██║ ╚████╔╝ ██║╚██████╗███████╗
+#  ╚══════╝╚══════╝╚═╝  ╚═╝  ╚═══╝  ╚═╝ ╚═════╝╚══════╝
+#  自定义服务 — 设置电表时间 / 读任意寄存器
+# =============================================================
+api:
+  services:
+    # ---- 设置电表时间 (年/月/日/时/分/秒 → 002F~0034H) ----
+    - service: set_meter_time
+      name: "设置电表时间"
+      variables:
+        year: int
+        month: int
+        day: int
+        hour: int
+        minute: int
+        second: int
+      then:
+        - lambda: |-
+            // 写多个寄存器 (功能码 0x10)
+            // 寄存器顺序: 002F=秒, 0030=分, 0031=时, 0032=日, 0033=月, 0034=年
+            std::vector<uint16_t> data = {
+              (uint16_t)second,
+              (uint16_t)minute,
+              (uint16_t)hour,
+              (uint16_t)day,
+              (uint16_t)month,
+              (uint16_t)(year % 100)
+            };
+            // 通过 modbus_controller 发送原始帧
+            auto *call = id(meter).create_write_registers_call();
+            call->set_function_code(0x10);
+            call->set_address(0x002F);
+            call->set_data(data);
+            call->perform();
+
+    # ---- 读任意寄存器 (调试用) ----
+    - service: read_raw_register
+      name: "读原始寄存器"
+      variables:
+        address: int
+        count: int
+      then:
+        - lambda: |-
+            auto *call = id(meter).create_read_registers_call();
+            call->set_function_code(0x03);
+            call->set_address(address);
+            call->set_register_count(count);
+            call->perform();
+
+    # ---- 写任意寄存器 (高级调试, 危险!) ----
+    - service: write_raw_register
+      name: "写原始寄存器"
+      variables:
+        address: int
+        value: int
+      then:
+        - lambda: |-
+            auto *call = id(meter).create_write_registers_call();
+            call->set_function_code(0x06);
+            call->set_address(address);
+            call->set_data({(uint16_t)value});
+            call->perform();
